@@ -34,7 +34,7 @@ jobs:
           chmod +x gradlew
           ./gradlew bootJar -x test
 
-      # 3. Convertir el nombre del repositorio a minúsculas para Docker/GHCR
+      # 3. Convertir el nombre del repositorio a minúsculas (Requisito obligatorio de GHCR)
       - name: Lowercase repository name
         run: |
           echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
@@ -63,7 +63,6 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
-          envs: TARGET_HOST_IP,IMAGE_NAME_LOWER
           script: |
             # --- APROVISIONAMIENTO IDEMPOTENTE DE SWAP ---
             if [ ! -f /swapfile ]; then
@@ -90,8 +89,8 @@ jobs:
               # Autenticar el Docker local del EC2 en GHCR
               echo '${{ secrets.GH_CR_PAT }}' | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
             
-              # Descargar la última versión de la imagen usando el nombre en minúsculas
-              docker pull ${{ env.REGISTRY }}/$IMAGE_NAME_LOWER:latest
+              # Descargar la última versión de la imagen
+              docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:latest
             
               # --- PASOS IDEMPOTENTES DEL CONTENEDOR ---
               docker stop ${{ env.CONTAINER_NAME }} || true
@@ -103,19 +102,12 @@ jobs:
                 --name ${{ env.CONTAINER_NAME }} \
                 -p 80:8080 \
                 -e PORT=8080 \
-                -e PUBLIC_HOST_URL='http://$TARGET_HOST_IP' \
+                -e PUBLIC_HOST_URL='http://${{ secrets.TARGET_HOST_IP }}' \
                 -e API_GATEWAY_SECRET='${{ secrets.API_GATEWAY_SECRET }}' \
-                -e DB_URL='jdbc:postgresql://aws-0-us-east-2.pooler.supabase.com:6543/postgres?sslmode=require' \
+                -e DB_URL='jdbc:postgresql://aws-0-us-east-2.pooler.supabase.com:5432/postgres' \
                 -e DB_USER='${{ secrets.SUPABASE_DB_USER }}' \
                 -e DB_PASSWORD='${{ secrets.SUPABASE_DB_PASSWORD }}' \
                 -e AWS_REGION='us-east-2' \
                 --restart unless-stopped \
-                ${{ env.REGISTRY }}/$IMAGE_NAME_LOWER:latest
+                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:latest
             "
-        env:
-          IMAGE_NAME_LOWER: ${{ env.IMAGE_NAME_LOWER }}
-          TARGET_HOST_IP: ${{ vars.TARGET_HOST_IP }}
-          API_GATEWAY_SECRET: ${{ secrets.API_GATEWAY_SECRET }}
-          GH_CR_PAT: ${{ secrets.GH_CR_PAT }}
-          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
