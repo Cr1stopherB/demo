@@ -7,7 +7,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
   CONTAINER_NAME: spring-app-ejemplo
 
 jobs:
@@ -35,7 +34,12 @@ jobs:
           chmod +x gradlew
           ./gradlew bootJar -x test
 
-      # 3. Autenticarse en GitHub Container Registry (GHCR) usando las variables de GitHub
+      # 3. Convertir el nombre del repositorio a minúsculas para Docker/GHCR
+      - name: Lowercase repository name
+        run: |
+          echo "IMAGE_NAME_LOWER=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      # 4. Autenticarse en GitHub Container Registry (GHCR) usando las variables de GitHub
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -43,23 +47,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 4. Construir y subir la imagen Docker a GHCR con el tag 'latest'
+      # 5. Construir y subir la imagen Docker a GHCR con el tag 'latest'
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:latest
 
-      # 5. Despliegue Automatizado e Idempotente vía SSH
+      # 6. Despliegue Automatizado e Idempotente vía SSH
       - name: Deploy to EC2 Instance
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ vars.TARGET_HOST_IP }}  # Lee tu IP 18.216.244.5
-          username: ec2-user                 # Usuario Amazon Linux
-          key: ${{ secrets.EC2_SSH_KEY }}     # Tu llave .pem
+          host: ${{ vars.TARGET_HOST_IP }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
-          envs: TARGET_HOST_IP
+          envs: TARGET_HOST_IP,IMAGE_NAME_LOWER
           script: |
             # --- APROVISIONAMIENTO IDEMPOTENTE DE SWAP ---
             if [ ! -f /swapfile ]; then
@@ -86,8 +90,8 @@ jobs:
               # Autenticar el Docker local del EC2 en GHCR
               echo '${{ secrets.GH_CR_PAT }}' | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
             
-              # Descargar la última versión de la imagen
-              docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+              # Descargar la última versión de la imagen usando el nombre en minúsculas
+              docker pull ${{ env.REGISTRY }}/$IMAGE_NAME_LOWER:latest
             
               # --- PASOS IDEMPOTENTES DEL CONTENEDOR ---
               docker stop ${{ env.CONTAINER_NAME }} || true
@@ -101,14 +105,15 @@ jobs:
                 -e PORT=8080 \
                 -e PUBLIC_HOST_URL='http://$TARGET_HOST_IP' \
                 -e API_GATEWAY_SECRET='${{ secrets.API_GATEWAY_SECRET }}' \
-                -e DB_URL='jdbc:postgresql://aws-0-us-east-2.pooler.supabase.com:5432/postgres' \
+                -e DB_URL='jdbc:postgresql://aws-0-us-east-2.pooler.supabase.com:6543/postgres?sslmode=require' \
                 -e DB_USER='${{ secrets.SUPABASE_DB_USER }}' \
                 -e DB_PASSWORD='${{ secrets.SUPABASE_DB_PASSWORD }}' \
                 -e AWS_REGION='us-east-2' \
                 --restart unless-stopped \
-                ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+                ${{ env.REGISTRY }}/$IMAGE_NAME_LOWER:latest
             "
         env:
+          IMAGE_NAME_LOWER: ${{ env.IMAGE_NAME_LOWER }}
           TARGET_HOST_IP: ${{ vars.TARGET_HOST_IP }}
           API_GATEWAY_SECRET: ${{ secrets.API_GATEWAY_SECRET }}
           GH_CR_PAT: ${{ secrets.GH_CR_PAT }}
